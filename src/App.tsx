@@ -2,7 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "./index.css";
 import { FileTree, type FileEntry } from "./FileTree";
 import { CanvasEditor } from "./canvas/Canvas";
-import { findDiagramBlocks, spliceDiagramAt } from "./planFile";
+import {
+  findDiagramBlocks,
+  spliceDiagramAt,
+  findTaskLines,
+  toggleTaskLine,
+} from "./planFile";
 
 type SaveState = "idle" | "saving" | "saved" | "error" | "conflict";
 
@@ -39,31 +44,89 @@ export function App() {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const diagramBlocks = useMemo(() => findDiagramBlocks(raw), [raw]);
+  const taskLines = useMemo(() => findTaskLines(raw), [raw]);
 
   // Scroll state used to re-anchor floating diagram buttons
   const [editorScrollTop, setEditorScrollTop] = useState(0);
+  // Nonce bumped on window resize — forces a re-render so the offscreen
+  // culling that reads textarea.clientHeight runs against the new size,
+  // even when lineHeight/scrollTop are unchanged.
+  const [resizeNonce, setResizeNonce] = useState(0);
+  void resizeNonce;
   // Measured line-height + padding-top of the textarea; read from
   // computed style once the element mounts / font loads.
   const [editorMetrics, setEditorMetrics] = useState({
     lineHeight: 0,
     paddingTop: 0,
+    paddingLeft: 0,
+    charWidth: 0,
   });
 
   useEffect(() => {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    const cs = window.getComputedStyle(ta);
-    const lineHeight = parseFloat(cs.lineHeight);
-    const paddingTop = parseFloat(cs.paddingTop);
-    if (
-      Number.isFinite(lineHeight) &&
-      Number.isFinite(paddingTop) &&
-      (lineHeight !== editorMetrics.lineHeight ||
-        paddingTop !== editorMetrics.paddingTop)
-    ) {
-      setEditorMetrics({ lineHeight, paddingTop });
+    let raf = 0;
+    const readMetrics = () => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      const cs = window.getComputedStyle(ta);
+      let lineHeight = parseFloat(cs.lineHeight);
+      const paddingTop = parseFloat(cs.paddingTop) || 0;
+      const paddingLeft = parseFloat(cs.paddingLeft) || 0;
+      // Fallback: if line-height resolves to "normal" or otherwise fails,
+      // approximate from font-size. Without this the floating diagram
+      // buttons silently fail to render.
+      if (!Number.isFinite(lineHeight) || lineHeight <= 0) {
+        const fs = parseFloat(cs.fontSize);
+        lineHeight = Number.isFinite(fs) && fs > 0 ? fs * 1.5 : 0;
+      }
+      if (lineHeight <= 0) {
+        // Element not laid out yet — retry on next frame.
+        raf = requestAnimationFrame(readMetrics);
+        return;
+      }
+      // Measure monospace char width via canvas so checkbox overlays
+      // align precisely to column positions in the textarea.
+      let charWidth = 0;
+      try {
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.font = `${cs.fontSize} ${cs.fontFamily}`;
+          charWidth = ctx.measureText("M").width;
+        }
+      } catch {
+        // ignore
+      }
+      if (charWidth <= 0) {
+        const fs = parseFloat(cs.fontSize);
+        charWidth = Number.isFinite(fs) && fs > 0 ? fs * 0.6 : 8;
+      }
+      setEditorMetrics(prev =>
+        prev.lineHeight === lineHeight &&
+        prev.paddingTop === paddingTop &&
+        prev.paddingLeft === paddingLeft &&
+        prev.charWidth === charWidth
+          ? prev
+          : { lineHeight, paddingTop, paddingLeft, charWidth },
+      );
+    };
+    readMetrics();
+    // Re-read after custom fonts finish loading — first paint may use a
+    // fallback font with a slightly different line-height.
+    if (typeof document !== "undefined" && document.fonts?.ready) {
+      document.fonts.ready.then(readMetrics).catch(() => {});
     }
-  }, [activePath, editorMetrics.lineHeight, editorMetrics.paddingTop]);
+    // Resize invalidates clientHeight (used to cull offscreen buttons) and
+    // may indirectly change metrics if the user zooms.
+    const onResize = () => {
+      readMetrics();
+      setResizeNonce(n => n + 1);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [activePath]);
 
   // ── Refs ──
   const rawRef = useRef<string>("");
@@ -338,6 +401,12 @@ export function App() {
     }
   };
 
+  // ── Task checkbox toggle ──
+  const handleToggleTask = (lineIdx: number) => {
+    const nextRaw = toggleTaskLine(rawRef.current, lineIdx);
+    if (nextRaw !== rawRef.current) scheduleSave(nextRaw);
+  };
+
   // ── Diagram modal handlers ──
   const openDiagram = (index: number) => {
     const blocks = findDiagramBlocks(rawRef.current);
@@ -550,10 +619,47 @@ export function App() {
                 }
               />
               {editorMetrics.lineHeight > 0 &&
-                diagramBlocks.map((b, i) => {
+                taskLines.map(t => {
                   const top =
                     editorMetrics.paddingTop +
-                    b.openLineIdx * editorMetrics.lineHeight -
+                    t.lineIdx * editorMetrics.lineHeight -
+                    editorScrollTop;
+                  if (
+                    top < -editorMetrics.lineHeight ||
+                    top > (textareaRef.current?.clientHeight ?? 0)
+                  ) {
+                    return null;
+                  }
+                  const left =
+                    editorMetrics.paddingLeft +
+                    t.bracketCol * editorMetrics.charWidth;
+                  const width = editorMetrics.charWidth * 3;
+                  return (
+                    <button
+                      key={`task-${t.lineIdx}`}
+                      className={`task-checkbox${t.done ? " done" : ""}`}
+                      style={{
+                        top: `${top}px`,
+                        left: `${left}px`,
+                        width: `${width}px`,
+                        height: `${editorMetrics.lineHeight}px`,
+                      }}
+                      onClick={() => handleToggleTask(t.lineIdx)}
+                      title={t.done ? "Tandai belum selesai" : "Tandai selesai"}
+                    >
+                      {t.done ? "✓" : ""}
+                    </button>
+                  );
+                })}
+              {editorMetrics.lineHeight > 0 &&
+                diagramBlocks.map((b, i) => {
+                  // Anchor one line ABOVE the fence so the button
+                  // doesn't cover the ```plan text. Fall back to the
+                  // fence line itself if the block starts at line 0.
+                  const anchorLine = Math.max(0, b.openLineIdx - 1);
+                  const top =
+                    editorMetrics.paddingTop +
+                    anchorLine * editorMetrics.lineHeight -
                     editorScrollTop;
                   // Hide if scrolled out of view (keeps DOM clean-ish)
                   if (

@@ -134,6 +134,73 @@ export function spliceDiagram(raw: string, newContent: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Task lines (interactive checkboxes, anywhere in the file)
+// ---------------------------------------------------------------------------
+
+const TASK_RE = /^(\s*)- \[([ xX])\](.*)$/;
+
+export type TaskLine = {
+  lineIdx: number;
+  indent: number;
+  bracketCol: number; // column of the `[` char
+  done: boolean;
+  text: string;
+};
+
+/**
+ * Build a per-line mask: true if the line sits inside any fenced code
+ * block (the fence lines themselves also get `true`). Used to skip
+ * literal `- [ ]` strings that happen to live inside bash/js/etc blocks.
+ */
+function buildFenceMask(lines: string[]): boolean[] {
+  const mask = new Array<boolean>(lines.length).fill(false);
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^```/.test(lines[i])) {
+      mask[i] = true;
+      inFence = !inFence;
+      continue;
+    }
+    mask[i] = inFence;
+  }
+  return mask;
+}
+
+export function findTaskLines(raw: string): TaskLine[] {
+  const lines = raw.split("\n");
+  const mask = buildFenceMask(lines);
+  const out: TaskLine[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (mask[i]) continue;
+    const m = lines[i].match(TASK_RE);
+    if (!m) continue;
+    const indent = m[1].length;
+    out.push({
+      lineIdx: i,
+      indent,
+      bracketCol: indent + 2, // "- " is 2 chars, bracket follows
+      done: m[2].toLowerCase() === "x",
+      text: m[3].trim(),
+    });
+  }
+  return out;
+}
+
+export function toggleTaskLine(raw: string, lineIdx: number): string {
+  const lines = raw.split("\n");
+  const line = lines[lineIdx];
+  if (line === undefined) return raw;
+  const m = line.match(TASK_RE);
+  if (!m) return raw;
+  const indent = m[1].length;
+  const checkCol = indent + 3; // between the brackets: "- [" = 3 chars
+  const cur = line[checkCol];
+  const next = cur === " " ? "x" : " ";
+  lines[lineIdx] = line.slice(0, checkCol) + next + line.slice(checkCol + 1);
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
 // Section
 // ---------------------------------------------------------------------------
 

@@ -3,6 +3,8 @@ import {
   findDiagramBlock,
   findDiagramBlocks,
   spliceDiagramAt,
+  findTaskLines,
+  toggleTaskLine,
   spliceDiagram,
   findSection,
   spliceSection,
@@ -276,6 +278,39 @@ describe("findDiagramBlocks / spliceDiagramAt", () => {
   test("spliceDiagramAt out-of-range is a noop", () => {
     const raw = "```plan\nA\n```\n";
     expect(spliceDiagramAt(raw, 5, "Z")).toBe(raw);
+  });
+});
+
+describe("findTaskLines / toggleTaskLine", () => {
+  test("finds top-level and indented tasks", () => {
+    const raw = "- [ ] a\n- [x] b\n  - [ ] c\n";
+    const tasks = findTaskLines(raw);
+    expect(tasks.length).toBe(3);
+    expect(tasks[0].done).toBe(false);
+    expect(tasks[1].done).toBe(true);
+    expect(tasks[2].indent).toBe(2);
+    expect(tasks[2].bracketCol).toBe(4);
+  });
+
+  test("ignores task-looking lines inside code fences", () => {
+    const raw = "- [ ] real\n\n```bash\n- [ ] fake\n```\n\n- [x] real2\n";
+    const tasks = findTaskLines(raw);
+    expect(tasks.length).toBe(2);
+    expect(tasks[0].text).toBe("real");
+    expect(tasks[1].text).toBe("real2");
+  });
+
+  test("toggleTaskLine flips the single checkbox char, nothing else", () => {
+    const raw = "- [ ] hello world\n- [x] done\n";
+    const out = toggleTaskLine(raw, 0);
+    expect(out).toBe("- [x] hello world\n- [x] done\n");
+    const out2 = toggleTaskLine(out, 1);
+    expect(out2).toBe("- [x] hello world\n- [ ] done\n");
+  });
+
+  test("toggleTaskLine on non-task line is a noop", () => {
+    const raw = "# heading\n- [ ] a\n";
+    expect(toggleTaskLine(raw, 0)).toBe(raw);
   });
 });
 

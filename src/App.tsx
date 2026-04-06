@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { marked } from "marked";
+import DOMPurify from "dompurify";
 import "./index.css";
 import { FileTree, type FileEntry } from "./FileTree";
 import { CanvasEditor } from "./canvas/Canvas";
+
+marked.setOptions({ gfm: true, breaks: false });
 import {
   findDiagramBlocks,
   spliceDiagramAt,
@@ -35,6 +39,20 @@ export function App() {
   // ── Layout ──
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewWidth, setPreviewWidth] = useState(420);
+  const [helpOpen, setHelpOpen] = useState(false);
+
+  // Memoized sanitized preview HTML
+  const previewHtml = useMemo(() => {
+    if (!previewOpen) return "";
+    try {
+      const html = marked.parse(raw) as string;
+      return DOMPurify.sanitize(html);
+    } catch {
+      return "";
+    }
+  }, [raw, previewOpen]);
 
   // ── In-file search ──
   const [searchOpen, setSearchOpen] = useState(false);
@@ -508,6 +526,61 @@ export function App() {
     }
   };
 
+  // ── List auto-continue (Enter on "- ", "* ", "1. ", "- [ ] ", etc.) ──
+  const handleEditorKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== "Enter" || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) {
+      return;
+    }
+    const ta = e.currentTarget;
+    const pos = ta.selectionStart;
+    if (pos !== ta.selectionEnd) return; // has selection → default newline
+    const cur = rawRef.current;
+    const lineStart = cur.lastIndexOf("\n", pos - 1) + 1;
+    const lineEnd = (() => {
+      const n = cur.indexOf("\n", pos);
+      return n === -1 ? cur.length : n;
+    })();
+    const line = cur.slice(lineStart, lineEnd);
+    // Match: indent + bullet (- * +) or ordered (N.) + optional task marker
+    const m = line.match(/^(\s*)([-*+]|(\d+)\.)\s(\[[ xX]\]\s)?(.*)$/);
+    if (!m) return;
+    const indent = m[1];
+    const bullet = m[2];
+    const orderedNum = m[3] ? parseInt(m[3], 10) : null;
+    const hadTask = !!m[4];
+    const body = m[5];
+    // Empty item → exit list: replace line with bare indent, single newline
+    if (body.trim() === "") {
+      e.preventDefault();
+      const before = cur.slice(0, lineStart);
+      const after = cur.slice(lineEnd);
+      const nextRaw = before + indent + "\n" + after;
+      const caret = (before + indent + "\n").length;
+      scheduleSave(nextRaw);
+      // Defer so React commits the new value before we move the caret
+      requestAnimationFrame(() => {
+        const t = textareaRef.current;
+        if (t) t.setSelectionRange(caret, caret);
+      });
+      return;
+    }
+    // Continue list: insert newline + same prefix (reset task to unchecked)
+    e.preventDefault();
+    const nextBullet =
+      orderedNum !== null ? `${orderedNum + 1}.` : bullet;
+    const taskPart = hadTask ? "[ ] " : "";
+    const prefix = `${indent}${nextBullet} ${taskPart}`;
+    const head = cur.slice(0, pos);
+    const tail = cur.slice(pos);
+    const nextRaw = head + "\n" + prefix + tail;
+    const caret = head.length + 1 + prefix.length;
+    scheduleSave(nextRaw);
+    requestAnimationFrame(() => {
+      const t = textareaRef.current;
+      if (t) t.setSelectionRange(caret, caret);
+    });
+  };
+
   // ── Task checkbox toggle ──
   const handleToggleTask = (lineIdx: number) => {
     const nextRaw = toggleTaskLine(rawRef.current, lineIdx);
@@ -600,6 +673,33 @@ export function App() {
         openSearch();
         return;
       }
+      if (mod && e.key === "\\") {
+        e.preventDefault();
+        setPreviewOpen(p => !p);
+        return;
+      }
+      if (mod && e.key === "/") {
+        e.preventDefault();
+        setHelpOpen(h => !h);
+        return;
+      }
+      // Bare "?" opens help only when focus is not in an editable control
+      if (e.key === "?" && !mod) {
+        const t = e.target as HTMLElement | null;
+        const tag = t?.tagName;
+        const editable =
+          tag === "TEXTAREA" || tag === "INPUT" || t?.isContentEditable;
+        if (!editable) {
+          e.preventDefault();
+          setHelpOpen(true);
+          return;
+        }
+      }
+      if (e.key === "Escape" && helpOpen) {
+        e.preventDefault();
+        setHelpOpen(false);
+        return;
+      }
       if (mod && e.key.toLowerCase() === "b" && !e.shiftKey) {
         e.preventDefault();
         setSidebarCollapsed(c => !c);
@@ -611,7 +711,7 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editingDiagram]);
+  }, [editingDiagram, helpOpen]);
 
   // ── Resizers ──
   const startResizeLeft = (e: React.MouseEvent) => {
@@ -637,10 +737,30 @@ export function App() {
   const splitClass = [
     "main-split",
     sidebarCollapsed ? "sidebar-collapsed" : "",
-    "panel-hidden",
+    previewOpen ? "preview-open" : "",
   ]
     .filter(Boolean)
     .join(" ");
+
+  const startResizePreview = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = previewWidth;
+    const onMove = (ev: MouseEvent) => {
+      const next = startW + (startX - ev.clientX);
+      setPreviewWidth(Math.max(260, Math.min(900, next)));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
 
   return (
     <div className="app-canvas">
@@ -668,6 +788,20 @@ export function App() {
               + Diagram
             </button>
           )}
+          <button
+            className="icon-btn"
+            onClick={() => setPreviewOpen(p => !p)}
+            title="Toggle preview (⌘\\)"
+          >
+            {previewOpen ? "Preview ⟩" : "⟨ Preview"}
+          </button>
+          <button
+            className="icon-btn"
+            onClick={() => setHelpOpen(true)}
+            title="Shortcut cheatsheet (⌘/ atau ?)"
+          >
+            ?
+          </button>
           <StatusBadge state={saveState} />
         </div>
       </header>
@@ -694,6 +828,7 @@ export function App() {
         className={splitClass}
         style={{
           ["--sidebar-w" as any]: `${sidebarWidth}px`,
+          ["--preview-w" as any]: `${previewWidth}px`,
         }}
       >
         {!sidebarCollapsed && (
@@ -775,6 +910,7 @@ export function App() {
                 value={raw}
                 spellCheck={false}
                 onChange={e => scheduleSave(e.target.value)}
+                onKeyDown={handleEditorKeyDown}
                 onScroll={e =>
                   setEditorScrollTop((e.target as HTMLTextAreaElement).scrollTop)
                 }
@@ -883,6 +1019,20 @@ export function App() {
             </div>
           )}
         </div>
+
+        {previewOpen && activePath && (
+          <>
+            <div
+              className="resizer"
+              onMouseDown={startResizePreview}
+              title="Drag untuk ubah lebar preview"
+            />
+            <aside
+              className="md-preview"
+              dangerouslySetInnerHTML={{ __html: previewHtml }}
+            />
+          </>
+        )}
       </div>
 
       {editingDiagram !== null && (
@@ -908,6 +1058,90 @@ export function App() {
           </div>
         </div>
       )}
+
+      {helpOpen && (
+        <div
+          className="help-backdrop"
+          onClick={() => setHelpOpen(false)}
+        >
+          <div className="help-modal" onClick={e => e.stopPropagation()}>
+            <div className="help-header">
+              <span>Shortcut</span>
+              <button
+                className="icon-btn"
+                onClick={() => setHelpOpen(false)}
+                title="Tutup (Esc)"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="help-body">
+              <HelpGroup
+                title="File"
+                rows={[
+                  ["⌘B", "Toggle sidebar"],
+                  ["⌘S", "Simpan sekarang"],
+                ]}
+              />
+              <HelpGroup
+                title="Editor"
+                rows={[
+                  ["⌘F", "Cari di file"],
+                  ["⌘\\", "Toggle preview"],
+                  ["⌘/ atau ?", "Cheatsheet ini"],
+                ]}
+              />
+              <HelpGroup
+                title="Diagram"
+                rows={[
+                  ["Klik ✎ edit", "Buka canvas untuk blok itu"],
+                  ["+ Diagram", "Sisipkan blok baru di kursor"],
+                  ["Esc", "Keluar canvas (auto-save)"],
+                ]}
+              />
+              <HelpGroup
+                title="Task"
+                rows={[["Klik kotak", "Toggle - [ ] ↔ - [x]"]]}
+              />
+              <HelpGroup
+                title="Search"
+                rows={[
+                  ["Enter", "Match berikutnya"],
+                  ["Shift+Enter", "Sebelumnya"],
+                  ["Esc", "Tutup"],
+                ]}
+              />
+            </div>
+            <div className="help-footer">
+              Tip: tombol <kbd>?</kbd> di pojok kanan atas juga membuka ini.
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HelpGroup({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: [string, string][];
+}) {
+  return (
+    <div className="help-group">
+      <div className="help-group-title">{title}</div>
+      <dl className="help-list">
+        {rows.map(([k, v]) => (
+          <div key={k} className="help-row">
+            <dt>
+              <kbd>{k}</kbd>
+            </dt>
+            <dd>{v}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
 }

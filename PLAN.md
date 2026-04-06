@@ -65,6 +65,7 @@ apa saja
 
 - [x] nama
 - [ ] umur
+- [ ] apa itu
 
 
 ## Notes

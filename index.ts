@@ -15,10 +15,24 @@ import {
 
 const DEFAULT_FILE = "PLAN.md";
 
-// Parse args: support `--file <path>` / `-f <path>` anywhere in argv.
-function parseArgs(argv: string[]): { file: string; positional: string[] } {
+// Parse args: support `--file <path>` / `-f <path>` and
+// `--port <n>` / `-p <n>` anywhere in argv.
+function parseArgs(argv: string[]): {
+  file: string;
+  port: number | undefined;
+  positional: string[];
+} {
   let file = DEFAULT_FILE;
+  let port: number | undefined;
   const positional: string[] = [];
+  const parsePort = (v: string) => {
+    const n = Number.parseInt(v, 10);
+    if (!Number.isFinite(n) || n < 1 || n > 65535) {
+      console.error(`plan: --port tidak valid: ${v}`);
+      process.exit(1);
+    }
+    return n;
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--file" || a === "-f") {
@@ -31,11 +45,21 @@ function parseArgs(argv: string[]): { file: string; positional: string[] } {
       i++;
     } else if (a.startsWith("--file=")) {
       file = a.slice("--file=".length);
+    } else if (a === "--port" || a === "-p") {
+      const next = argv[i + 1];
+      if (!next) {
+        console.error("plan: --port butuh argumen nomor");
+        process.exit(1);
+      }
+      port = parsePort(next);
+      i++;
+    } else if (a.startsWith("--port=")) {
+      port = parsePort(a.slice("--port=".length));
     } else {
       positional.push(a);
     }
   }
-  return { file, positional };
+  return { file, port, positional };
 }
 
 function printHelp() {
@@ -59,6 +83,8 @@ Penggunaan:
 Opsi:
   -f, --file <path>       File target (default ${DEFAULT_FILE}).
                           Path relatif terhadap cwd, harus .md.
+  -p, --port <n>          Port untuk editor web (default: random
+                          ephemeral). Hanya relevan tanpa subcommand.
 
 Contoh:
   plan status
@@ -79,7 +105,7 @@ async function openBrowser(url: string) {
 }
 
 async function main() {
-  const { file, positional } = parseArgs(process.argv.slice(2));
+  const { file, port, positional } = parseArgs(process.argv.slice(2));
   const cmd = positional[0];
 
   if (cmd === "--help" || cmd === "-h" || cmd === "help") {
@@ -117,6 +143,7 @@ async function main() {
   const server = startServer({
     cwd: process.cwd(),
     dev: process.env.NODE_ENV !== "production",
+    port,
   });
 
   const url = server.url.toString().replace(/\/$/, "");

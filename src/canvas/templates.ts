@@ -1,0 +1,109 @@
+/**
+ * Template ASCII siap-stempel. Tiap entry punya ASCII mentah —
+ * saat user klik, Canvas buat Grid dari string ini dan masuk
+ * mode paste-float (sama seperti hasil copy internal).
+ */
+export type Template = {
+  id: string;
+  name: string;
+  ascii: string;
+};
+
+export const TEMPLATES: Template[] = [
+  {
+    id: "box-sm",
+    name: "Box kecil",
+    ascii:
+`┌─────┐
+│     │
+└─────┘`,
+  },
+  {
+    id: "box-md",
+    name: "Box sedang",
+    ascii:
+`┌──────────┐
+│          │
+│          │
+└──────────┘`,
+  },
+  {
+    id: "box-rounded",
+    name: "Box rounded",
+    ascii:
+`╭──────────╮
+│          │
+╰──────────╯`,
+  },
+  {
+    id: "diamond",
+    name: "Decision",
+    ascii:
+`   ╭───╮
+  ╱     ╲
+ ╱       ╲
+╱         ╲
+╲         ╱
+ ╲       ╱
+  ╲     ╱
+   ╰───╯`,
+  },
+  {
+    id: "flow-3",
+    name: "Flow 3 node",
+    ascii:
+`┌───────┐     ┌─────────┐     ┌───────┐
+│ start │────▶│ process │────▶│  end  │
+└───────┘     └─────────┘     └───────┘`,
+  },
+  {
+    id: "fork",
+    name: "Fork / branch",
+    ascii:
+`          ┌─────────┐
+     ┌───▶│  left   │
+┌────┴┐   └─────────┘
+│ src │
+└────┬┘   ┌─────────┐
+     └───▶│  right  │
+          └─────────┘`,
+  },
+  {
+    id: "tree",
+    name: "Tree 2-level",
+    ascii:
+`        ┌──────┐
+        │ root │
+        └──┬───┘
+     ┌─────┼─────┐
+  ┌──┴─┐ ┌─┴──┐ ┌┴───┐
+  │ a  │ │ b  │ │ c  │
+  └────┘ └────┘ └────┘`,
+  },
+  {
+    id: "swimlane",
+    name: "Swimlane 2",
+    ascii:
+`┌──────────┬─────────────────────┐
+│   User   │        System       │
+├──────────┼─────────────────────┤
+│          │                     │
+│          │                     │
+│          │                     │
+└──────────┴─────────────────────┘`,
+  },
+  {
+    id: "arrow-right",
+    name: "Arrow →",
+    ascii: `──────▶`,
+  },
+  {
+    id: "arrow-updown",
+    name: "Arrow ↕",
+    ascii:
+`▲
+│
+│
+▼`,
+  },
+];

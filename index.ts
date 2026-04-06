@@ -20,10 +20,12 @@ const DEFAULT_FILE = "PLAN.md";
 function parseArgs(argv: string[]): {
   file: string;
   port: number | undefined;
+  noOpen: boolean;
   positional: string[];
 } {
   let file = DEFAULT_FILE;
   let port: number | undefined;
+  let noOpen = false;
   const positional: string[] = [];
   const parsePort = (v: string) => {
     const n = Number.parseInt(v, 10);
@@ -55,11 +57,13 @@ function parseArgs(argv: string[]): {
       i++;
     } else if (a.startsWith("--port=")) {
       port = parsePort(a.slice("--port=".length));
+    } else if (a === "--no-open") {
+      noOpen = true;
     } else {
       positional.push(a);
     }
   }
-  return { file, port, positional };
+  return { file, port, noOpen, positional };
 }
 
 function printHelp() {
@@ -85,6 +89,9 @@ Opsi:
                           Path relatif terhadap cwd, harus .md.
   -p, --port <n>          Port untuk editor web (default: random
                           ephemeral). Hanya relevan tanpa subcommand.
+                          Saat di-pin, browser TIDAK otomatis dibuka
+                          (asumsi kamu mau reattach ke tab lama).
+      --no-open           Jangan auto-buka browser saat start editor.
 
 Contoh:
   plan status
@@ -105,7 +112,7 @@ async function openBrowser(url: string) {
 }
 
 async function main() {
-  const { file, port, positional } = parseArgs(process.argv.slice(2));
+  const { file, port, noOpen, positional } = parseArgs(process.argv.slice(2));
   const cmd = positional[0];
 
   if (cmd === "--help" || cmd === "-h" || cmd === "help") {
@@ -140,11 +147,24 @@ async function main() {
     process.exit(1);
   }
 
-  const server = startServer({
-    cwd: process.cwd(),
-    dev: process.env.NODE_ENV !== "production",
-    port,
-  });
+  let server;
+  try {
+    server = startServer({
+      cwd: process.cwd(),
+      dev: process.env.NODE_ENV !== "production",
+      port,
+    });
+  } catch (err: any) {
+    const code = err?.code ?? "";
+    if (code === "EADDRINUSE" || /EADDRINUSE|in use/i.test(String(err?.message))) {
+      const p = port ?? "(random)";
+      console.error(`plan: port ${p} sudah dipakai proses lain.`);
+      console.error(`      cek dengan: lsof -i :${p}`);
+      console.error(`      atau jalankan tanpa --port untuk pakai port acak.`);
+      process.exit(1);
+    }
+    throw err;
+  }
 
   const url = server.url.toString().replace(/\/$/, "");
   console.log(`\n  plan editor siap`);
@@ -152,7 +172,24 @@ async function main() {
   console.log(`  url       : ${url}`);
   console.log(`\n  Tekan Ctrl+C untuk keluar.\n`);
 
-  await openBrowser(url);
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\nplan: menerima ${signal}, menutup server...`);
+    server.stop(true);
+    process.exit(0);
+  };
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGHUP", () => shutdown("SIGHUP"));
+
+  // Auto-open hanya kalau port random (default). Kalau user pin --port,
+  // asumsinya dia mau reattach ke tab lama — jangan spam tab baru.
+  // --no-open selalu menang.
+  if (!noOpen && port === undefined) {
+    await openBrowser(url);
+  }
 }
 
 main().catch(err => {

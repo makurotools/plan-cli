@@ -65,21 +65,13 @@ html, body, #root {
 .main-split {
   flex: 1;
   display: grid;
-  grid-template-columns: var(--sidebar-w, 240px) 5px 1fr 5px var(--panel-w, 380px);
+  grid-template-columns: var(--sidebar-w, 240px) 5px 1fr;
   min-height: 0;
   overflow: hidden;
 }
 
-.main-split.collapsed {
-  grid-template-columns: var(--sidebar-w, 240px) 5px 1fr 0 0;
-}
-
 .main-split.sidebar-collapsed {
-  grid-template-columns: 0 0 1fr 5px var(--panel-w, 380px);
-}
-
-.main-split.sidebar-collapsed.collapsed {
-  grid-template-columns: 0 0 1fr 0 0;
+  grid-template-columns: 0 0 1fr;
 }
 
 .main-canvas {
@@ -87,6 +79,84 @@ html, body, #root {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.editor-wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.diagram-float-btn {
+  position: absolute;
+  right: 1.25rem;
+  z-index: 5;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  font-family: inherit;
+  background: var(--bg-2);
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 0.12s, color 0.12s, border-color 0.12s, background 0.12s;
+  pointer-events: auto;
+}
+
+.diagram-float-btn:hover {
+  opacity: 1;
+  color: var(--accent);
+  border-color: var(--border-focus);
+  background: var(--bg);
+}
+
+.diagram-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.diagram-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.diagram-modal-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.raw-editor {
+  flex: 1;
+  width: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 1rem 1.25rem 2rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
 }
 
 .resizer {

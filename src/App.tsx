@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./index.css";
-import { CanvasEditor } from "./canvas/Canvas";
-import { MetaPanel } from "./meta/MetaPanel";
 import { FileTree, type FileEntry } from "./FileTree";
-import type { PlanModel } from "./model";
+import { CanvasEditor } from "./canvas/Canvas";
+import { findDiagramBlocks, spliceDiagramAt } from "./planFile";
 
 type SaveState = "idle" | "saving" | "saved" | "error" | "conflict";
 
@@ -11,10 +10,7 @@ type FileView = {
   path: string;
   absPath: string;
   mtime: number;
-  diagram: string;
-  hasDiagram: boolean;
-  hasStructure: boolean;
-  sections: { context: string; scope: string; task: string; notes: string };
+  raw: string;
 };
 
 export function App() {
@@ -24,24 +20,53 @@ export function App() {
   const [workspaceCwd, setWorkspaceCwd] = useState("");
 
   // ── Active file state ──
-  const [model, setModel] = useState<PlanModel | null>(null);
-  const [initialDiagram, setInitialDiagram] = useState<string | null>(null);
+  const [raw, setRaw] = useState<string>("");
   const [absPath, setAbsPath] = useState("");
-  const [hasStructure, setHasStructure] = useState(false);
 
   // ── Save state ──
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [conflict, setConflict] = useState<null | FileView>(null);
 
   // ── Layout ──
-  const [panelWidth, setPanelWidth] = useState(380);
   const [sidebarWidth, setSidebarWidth] = useState(240);
-  const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
+  // ── Diagram modal ──
+  // editingDiagram = index of block being edited; null = closed.
+  const [editingDiagram, setEditingDiagram] = useState<number | null>(null);
+  const editingInitialRef = useRef<string>("");
+  const editingDraftRef = useRef<string>("");
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const diagramBlocks = useMemo(() => findDiagramBlocks(raw), [raw]);
+
+  // Scroll state used to re-anchor floating diagram buttons
+  const [editorScrollTop, setEditorScrollTop] = useState(0);
+  // Measured line-height + padding-top of the textarea; read from
+  // computed style once the element mounts / font loads.
+  const [editorMetrics, setEditorMetrics] = useState({
+    lineHeight: 0,
+    paddingTop: 0,
+  });
+
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const cs = window.getComputedStyle(ta);
+    const lineHeight = parseFloat(cs.lineHeight);
+    const paddingTop = parseFloat(cs.paddingTop);
+    if (
+      Number.isFinite(lineHeight) &&
+      Number.isFinite(paddingTop) &&
+      (lineHeight !== editorMetrics.lineHeight ||
+        paddingTop !== editorMetrics.paddingTop)
+    ) {
+      setEditorMetrics({ lineHeight, paddingTop });
+    }
+  }, [activePath, editorMetrics.lineHeight, editorMetrics.paddingTop]);
+
   // ── Refs ──
-  const modelRef = useRef<PlanModel | null>(null);
-  const hasStructureRef = useRef(false);
+  const rawRef = useRef<string>("");
   const activePathRef = useRef<string | null>(null);
   const baseMtimeRef = useRef<number>(0);
   const dirtyRef = useRef(false);
@@ -66,20 +91,10 @@ export function App() {
   const applyView = (view: FileView) => {
     activePathRef.current = view.path;
     setActivePath(view.path);
-    const m: PlanModel = {
-      diagram: view.diagram,
-      context: view.sections.context,
-      scope: view.sections.scope,
-      task: view.sections.task,
-      notes: view.sections.notes,
-    };
-    modelRef.current = m;
+    rawRef.current = view.raw;
     baseMtimeRef.current = view.mtime;
-    hasStructureRef.current = view.hasStructure;
-    setModel(m);
-    setInitialDiagram(view.diagram);
+    setRaw(view.raw);
     setAbsPath(view.absPath);
-    setHasStructure(view.hasStructure);
     dirtyRef.current = false;
     setConflict(null);
     setSaveState("idle");
@@ -100,26 +115,13 @@ export function App() {
     }
   };
 
-  const buildPayload = (m: PlanModel) => {
-    // Always send diagram. Only send sections if file has plan structure
-    // (otherwise the splice would be a noop anyway, but it's cleaner to
-    //  not pretend we have data the server can't use).
-    const payload: any = { diagram: m.diagram, baseMtime: baseMtimeRef.current };
-    if (hasStructureRef.current) {
-      payload.sections = {
-        context: m.context,
-        scope: m.scope,
-        task: m.task,
-        notes: m.notes,
-      };
-    }
-    return payload;
-  };
+  const buildPayload = (nextRaw: string) => ({
+    raw: nextRaw,
+    baseMtime: baseMtimeRef.current,
+  });
 
   const flushSave = async (): Promise<boolean> => {
-    if (!dirtyRef.current || !modelRef.current || !activePathRef.current) {
-      return true;
-    }
+    if (!dirtyRef.current || !activePathRef.current) return true;
     if (timer.current) {
       clearTimeout(timer.current);
       timer.current = null;
@@ -130,7 +132,7 @@ export function App() {
       const res = await fetch(`/api/file?path=${encodeURIComponent(path)}`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(buildPayload(modelRef.current)),
+        body: JSON.stringify(buildPayload(rawRef.current)),
       });
       if (res.status === 409) {
         setConflict(await res.json());
@@ -140,8 +142,6 @@ export function App() {
       if (!res.ok) throw new Error(String(res.status));
       const data = (await res.json()) as FileView;
       baseMtimeRef.current = data.mtime;
-      hasStructureRef.current = data.hasStructure;
-      setHasStructure(data.hasStructure);
       dirtyRef.current = false;
       setSaveState("saved");
       return true;
@@ -223,11 +223,11 @@ export function App() {
   }, []);
 
   // ── Save scheduler ──
-  const scheduleSave = (next: PlanModel) => {
+  const scheduleSave = (nextRaw: string) => {
     if (!activePathRef.current) return;
-    modelRef.current = next;
+    rawRef.current = nextRaw;
     dirtyRef.current = true;
-    setModel(next);
+    setRaw(nextRaw);
     setSaveState("saving");
     if (timer.current) clearTimeout(timer.current);
     const pathAtSchedule = activePathRef.current;
@@ -238,7 +238,7 @@ export function App() {
           {
             method: "PUT",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify(buildPayload(next)),
+            body: JSON.stringify(buildPayload(nextRaw)),
           },
         );
         if (activePathRef.current !== pathAtSchedule) return;
@@ -250,14 +250,12 @@ export function App() {
         if (!res.ok) throw new Error(String(res.status));
         const data = (await res.json()) as FileView;
         baseMtimeRef.current = data.mtime;
-        hasStructureRef.current = data.hasStructure;
-        setHasStructure(data.hasStructure);
         dirtyRef.current = false;
         setSaveState("saved");
       } catch {
         setSaveState("error");
       }
-    }, 300);
+    }, 600);
   };
 
   // ── Conflict resolution ──
@@ -268,50 +266,10 @@ export function App() {
   };
 
   const overrideSave = async () => {
-    if (!modelRef.current || !conflict) return;
+    if (!conflict) return;
     baseMtimeRef.current = conflict.mtime;
     setConflict(null);
-    scheduleSave(modelRef.current);
-  };
-
-  // ── Edit handlers ──
-  const handleDiagramChange = (diagram: string) => {
-    if (!modelRef.current) return;
-    scheduleSave({ ...modelRef.current, diagram });
-  };
-
-  const handleMetaChange = (next: PlanModel) => {
-    scheduleSave(next);
-  };
-
-  // ── Plan structure activation ──
-  const enablePlanStructure = async () => {
-    const path = activePathRef.current;
-    if (!path) return;
-    // Flush any pending edits first so we don't race
-    if (dirtyRef.current) {
-      const ok = await flushSave();
-      if (!ok) return;
-    }
-    try {
-      const res = await fetch(
-        `/api/file/scaffold?path=${encodeURIComponent(path)}`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ baseMtime: baseMtimeRef.current }),
-        },
-      );
-      if (res.status === 409) {
-        setConflict(await res.json());
-        setSaveState("conflict");
-        return;
-      }
-      if (!res.ok) throw new Error(String(res.status));
-      applyView(await res.json());
-    } catch {
-      setSaveState("error");
-    }
+    scheduleSave(rawRef.current);
   };
 
   // ── File operations ──
@@ -345,9 +303,8 @@ export function App() {
       if (activePathRef.current === path) {
         activePathRef.current = null;
         setActivePath(null);
-        modelRef.current = null;
-        setModel(null);
-        setInitialDiagram(null);
+        rawRef.current = "";
+        setRaw("");
         dirtyRef.current = false;
         if (list.length > 0) await loadFile(list[0].path);
       }
@@ -381,21 +338,99 @@ export function App() {
     }
   };
 
+  // ── Diagram modal handlers ──
+  const openDiagram = (index: number) => {
+    const blocks = findDiagramBlocks(rawRef.current);
+    const loc = blocks[index];
+    if (!loc) return;
+    editingInitialRef.current = loc.content;
+    editingDraftRef.current = loc.content;
+    setEditingDiagram(index);
+  };
+
+  const closeDiagram = (save: boolean) => {
+    const idx = editingDiagram;
+    if (idx === null) {
+      setEditingDiagram(null);
+      return;
+    }
+    if (save && editingDraftRef.current !== editingInitialRef.current) {
+      const nextRaw = spliceDiagramAt(
+        rawRef.current,
+        idx,
+        editingDraftRef.current,
+      );
+      if (nextRaw !== rawRef.current) scheduleSave(nextRaw);
+    }
+    setEditingDiagram(null);
+  };
+
+  const insertNewDiagram = () => {
+    const ta = textareaRef.current;
+    const block = "```plan\n\n```\n";
+    let nextRaw: string;
+    let newBlockIndex: number;
+    const before = rawRef.current;
+    if (ta && document.activeElement === ta) {
+      const pos = ta.selectionStart;
+      // Ensure insertion starts at beginning of a line with blank padding
+      const head = before.slice(0, pos);
+      const tail = before.slice(pos);
+      const leadNL = head.length === 0 || head.endsWith("\n\n") ? "" : head.endsWith("\n") ? "\n" : "\n\n";
+      const trailNL = tail.startsWith("\n") || tail.length === 0 ? "\n" : "\n\n";
+      nextRaw = head + leadNL + block + trailNL + tail;
+    } else {
+      const sep =
+        before.length === 0
+          ? ""
+          : before.endsWith("\n\n")
+            ? ""
+            : before.endsWith("\n")
+              ? "\n"
+              : "\n\n";
+      nextRaw = before + sep + block;
+    }
+    // Count diagram blocks up to where we inserted, new one is the last
+    // added → its index = total blocks in nextRaw - 1 for append, or the
+    // position in nextRaw's block order for mid-insert. Easiest: recount.
+    scheduleSave(nextRaw);
+    // Open the new block immediately. findDiagramBlocks on nextRaw gives
+    // the correct index — find the first block whose content is "".
+    const blocksAfter = findDiagramBlocks(nextRaw);
+    // Prefer the block nearest the insertion position if there are
+    // multiple empties — for simplicity, pick the last empty block.
+    newBlockIndex = blocksAfter.length - 1;
+    for (let i = blocksAfter.length - 1; i >= 0; i--) {
+      if (blocksAfter[i].content === "") {
+        newBlockIndex = i;
+        break;
+      }
+    }
+    // Defer open so state flushes first
+    setTimeout(() => openDiagram(newBlockIndex), 0);
+  };
+
   // ── Keyboard shortcuts ──
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.shiftKey && e.key.toLowerCase() === "m") {
+      if (e.key === "Escape" && editingDiagram !== null) {
         e.preventDefault();
-        setPanelCollapsed(c => !c);
-      } else if (mod && e.key.toLowerCase() === "b" && !e.shiftKey) {
+        closeDiagram(true);
+        return;
+      }
+      if (mod && e.key.toLowerCase() === "b" && !e.shiftKey) {
         e.preventDefault();
         setSidebarCollapsed(c => !c);
+      } else if (mod && e.key.toLowerCase() === "s" && !e.shiftKey) {
+        e.preventDefault();
+        flushSave();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingDiagram]);
 
   // ── Resizers ──
   const startResizeLeft = (e: React.MouseEvent) => {
@@ -418,30 +453,10 @@ export function App() {
     window.addEventListener("mouseup", onUp);
   };
 
-  const startResizeRight = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = panelWidth;
-    const onMove = (ev: MouseEvent) => {
-      const next = startW + (startX - ev.clientX);
-      setPanelWidth(Math.max(280, Math.min(720, next)));
-    };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
-
   const splitClass = [
     "main-split",
     sidebarCollapsed ? "sidebar-collapsed" : "",
-    panelCollapsed ? "collapsed" : "",
+    "panel-hidden",
   ]
     .filter(Boolean)
     .join(" ");
@@ -463,13 +478,15 @@ export function App() {
           >
             {sidebarCollapsed ? "Files ⟩" : "⟨ Files"}
           </button>
-          <button
-            className="icon-btn"
-            onClick={() => setPanelCollapsed(c => !c)}
-            title="Toggle meta panel (⌘⇧M)"
-          >
-            {panelCollapsed ? "⟨ Panel" : "Panel ⟩"}
-          </button>
+          {activePath && (
+            <button
+              className="icon-btn"
+              onClick={insertNewDiagram}
+              title="Sisipkan blok diagram baru"
+            >
+              + Diagram
+            </button>
+          )}
           <StatusBadge state={saveState} />
         </div>
       </header>
@@ -495,7 +512,6 @@ export function App() {
       <div
         className={splitClass}
         style={{
-          ["--panel-w" as any]: `${panelWidth}px`,
           ["--sidebar-w" as any]: `${sidebarWidth}px`,
         }}
       >
@@ -520,12 +536,45 @@ export function App() {
         )}
 
         <div className="main-canvas">
-          {model && initialDiagram !== null && activePath ? (
-            <CanvasEditor
-              key={activePath}
-              initial={initialDiagram}
-              onChange={handleDiagramChange}
-            />
+          {activePath ? (
+            <div className="editor-wrap">
+              <textarea
+                key={activePath}
+                ref={textareaRef}
+                className="raw-editor"
+                value={raw}
+                spellCheck={false}
+                onChange={e => scheduleSave(e.target.value)}
+                onScroll={e =>
+                  setEditorScrollTop((e.target as HTMLTextAreaElement).scrollTop)
+                }
+              />
+              {editorMetrics.lineHeight > 0 &&
+                diagramBlocks.map((b, i) => {
+                  const top =
+                    editorMetrics.paddingTop +
+                    b.openLineIdx * editorMetrics.lineHeight -
+                    editorScrollTop;
+                  // Hide if scrolled out of view (keeps DOM clean-ish)
+                  if (
+                    top < -editorMetrics.lineHeight ||
+                    top > (textareaRef.current?.clientHeight ?? 0)
+                  ) {
+                    return null;
+                  }
+                  return (
+                    <button
+                      key={i}
+                      className="diagram-float-btn"
+                      style={{ top: `${top}px` }}
+                      onClick={() => openDiagram(i)}
+                      title={`Edit diagram (baris ${b.openLineIdx + 1})`}
+                    >
+                      ✎ edit
+                    </button>
+                  );
+                })}
+            </div>
           ) : (
             <div className="loading">
               {files.length === 0
@@ -534,41 +583,31 @@ export function App() {
             </div>
           )}
         </div>
-
-        {!panelCollapsed && activePath && (
-          <>
-            <div
-              className="resizer"
-              onMouseDown={startResizeRight}
-              title="Drag untuk ubah lebar panel"
-            />
-            {hasStructure && model ? (
-              <MetaPanel
-                key={activePath}
-                model={model}
-                onChange={handleMetaChange}
-              />
-            ) : (
-              <aside className="meta-panel meta-panel-disabled">
-                <div className="meta-disabled-card">
-                  <div className="meta-disabled-title">
-                    Plan structure belum aktif
-                  </div>
-                  <p className="meta-disabled-body">
-                    File ini hanya menyimpan diagram. Aktifkan untuk menambahkan
-                    section <code>Context</code>, <code>Scope</code>,{" "}
-                    <code>Task</code>, dan <code>Notes</code> ke akhir file.
-                    Konten yang sudah ada tidak akan diubah.
-                  </p>
-                  <button className="icon-btn" onClick={enablePlanStructure}>
-                    Aktifkan plan structure
-                  </button>
-                </div>
-              </aside>
-            )}
-          </>
-        )}
       </div>
+
+      {editingDiagram !== null && (
+        <div className="diagram-modal">
+          <div className="diagram-modal-header">
+            <span>Edit diagram #{editingDiagram + 1}</span>
+            <div className="header-actions">
+              <button className="icon-btn" onClick={() => closeDiagram(false)}>
+                Batal
+              </button>
+              <button className="icon-btn" onClick={() => closeDiagram(true)}>
+                Done (Esc)
+              </button>
+            </div>
+          </div>
+          <div className="diagram-modal-body">
+            <CanvasEditor
+              initial={editingInitialRef.current}
+              onChange={text => {
+                editingDraftRef.current = text;
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

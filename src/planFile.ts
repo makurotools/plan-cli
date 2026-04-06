@@ -49,23 +49,62 @@ export type SectionLocation = {
 // ---------------------------------------------------------------------------
 
 export function findDiagramBlock(raw: string): DiagramLocation {
-  const lines = raw.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    if (DIAGRAM_FENCE_RE.test(lines[i])) {
-      for (let j = i + 1; j < lines.length; j++) {
-        if (CLOSE_FENCE_RE.test(lines[j])) {
-          return {
-            exists: true,
-            content: lines.slice(i + 1, j).join("\n"),
-            openLineIdx: i,
-            closeLineIdx: j,
-          };
-        }
-      }
-      break; // unclosed fence — give up
-    }
-  }
+  const all = findDiagramBlocks(raw);
+  if (all.length > 0) return all[0];
   return { exists: false, content: "", openLineIdx: -1, closeLineIdx: -1 };
+}
+
+/**
+ * Find every diagram fenced code block in the file, in order.
+ * An "unclosed" fence is skipped (we only return well-formed blocks).
+ */
+export function findDiagramBlocks(raw: string): DiagramLocation[] {
+  const lines = raw.split("\n");
+  const out: DiagramLocation[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (DIAGRAM_FENCE_RE.test(lines[i])) {
+      let j = i + 1;
+      while (j < lines.length && !CLOSE_FENCE_RE.test(lines[j])) j++;
+      if (j < lines.length) {
+        out.push({
+          exists: true,
+          content: lines.slice(i + 1, j).join("\n"),
+          openLineIdx: i,
+          closeLineIdx: j,
+        });
+        i = j + 1;
+        continue;
+      }
+      break; // unclosed → stop scanning
+    }
+    i++;
+  }
+  return out;
+}
+
+/**
+ * Replace the N-th diagram block's content (0-indexed). No-op if index
+ * out of range or content unchanged. Does not touch anything outside the
+ * target block.
+ */
+export function spliceDiagramAt(
+  raw: string,
+  index: number,
+  newContent: string,
+): string {
+  const blocks = findDiagramBlocks(raw);
+  const loc = blocks[index];
+  if (!loc) return raw;
+  if (loc.content === newContent) return raw;
+  const lines = raw.split("\n");
+  const body = newContent === "" ? [] : newContent.split("\n");
+  const next = [
+    ...lines.slice(0, loc.openLineIdx + 1),
+    ...body,
+    ...lines.slice(loc.closeLineIdx),
+  ];
+  return next.join("\n");
 }
 
 export function spliceDiagram(raw: string, newContent: string): string {

@@ -1,6 +1,8 @@
 import { test, expect, describe } from "bun:test";
 import {
   findDiagramBlock,
+  findDiagramBlocks,
+  spliceDiagramAt,
   spliceDiagram,
   findSection,
   spliceSection,
@@ -244,6 +246,36 @@ describe("applyPatch", () => {
     const raw = "# hi\n";
     const out = applyPatch(raw, { diagram: "box" });
     expect(out).toBe("# hi\n\n```plan\nbox\n```\n");
+  });
+});
+
+describe("findDiagramBlocks / spliceDiagramAt", () => {
+  test("finds multiple blocks with diagram/ascii/plan fences", () => {
+    const raw =
+      "# hi\n\n```plan\nA\n```\n\nmid\n\n```diagram\nB\n```\n\nend\n\n```ascii\nC\n```\n";
+    const blocks = findDiagramBlocks(raw);
+    expect(blocks.length).toBe(3);
+    expect(blocks[0].content).toBe("A");
+    expect(blocks[1].content).toBe("B");
+    expect(blocks[2].content).toBe("C");
+  });
+
+  test("ignores non-diagram fences", () => {
+    const raw = "```bash\nls\n```\n\n```plan\nX\n```\n";
+    const blocks = findDiagramBlocks(raw);
+    expect(blocks.length).toBe(1);
+    expect(blocks[0].content).toBe("X");
+  });
+
+  test("spliceDiagramAt replaces only the targeted block", () => {
+    const raw = "```plan\nA\n```\n\n```plan\nB\n```\n";
+    const out = spliceDiagramAt(raw, 1, "B2");
+    expect(out).toBe("```plan\nA\n```\n\n```plan\nB2\n```\n");
+  });
+
+  test("spliceDiagramAt out-of-range is a noop", () => {
+    const raw = "```plan\nA\n```\n";
+    expect(spliceDiagramAt(raw, 5, "Z")).toBe(raw);
   });
 });
 

@@ -96,6 +96,7 @@ export function startServer(opts: StartServerOptions) {
           if (r instanceof Response) return r;
           try {
             const body = (await req.json()) as PlanPatch & {
+              raw?: string;
               baseMtime?: number;
             };
             // Read current state
@@ -111,11 +112,16 @@ export function startServer(opts: StartServerOptions) {
                 );
               }
             }
-            // Apply patch (splice diagram + sections as provided)
-            const nextRaw = applyPatch(current.raw, {
-              diagram: body.diagram,
-              sections: body.sections,
-            });
+            // Two write modes:
+            //  - raw: whole-file replace (browser full editor)
+            //  - patch: splice diagram/sections (CLI + legacy)
+            const nextRaw =
+              typeof body.raw === "string"
+                ? body.raw
+                : applyPatch(current.raw, {
+                    diagram: body.diagram,
+                    sections: body.sections,
+                  });
             // Byte-identical → skip the actual file write, keep mtime stable
             if (nextRaw === current.raw) {
               return Response.json({

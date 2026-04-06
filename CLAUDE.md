@@ -104,3 +104,53 @@ bun --hot ./index.ts
 ```
 
 For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.
+
+## Project-specific: plan-cli
+
+This repo is published to npm as **`@malikkurosaki/plan-cli`** (command: `plan`).
+
+### Invariants — DO NOT break
+
+- **Non-destructive editing is the core guarantee.** Opening a file, typing
+  nothing, and saving must produce a byte-identical file. All file mutations
+  go through the splice helpers in `src/planFile.ts` (`spliceDiagram`,
+  `spliceDiagramAt`, `spliceSection`, `toggleTaskLine`, `applyPatch`). Do
+  not introduce global reformatters.
+- **Lazy-create only.** A diagram fence (` ```plan `) or section heading is
+  appended only when the user actually writes content into it. Never scaffold
+  proactively on read/open.
+- **Fence-mask code blocks.** When scanning for tasks or sections, respect
+  `buildFenceMask` so literal `- [ ]` inside ` ```bash ` etc. is ignored.
+- **`findSection` stops at the next `## heading` OR a diagram fence,**
+  whichever comes first — the diagram block is conceptually independent of
+  any section it happens to sit after.
+
+### Server + CLI
+
+- `src/server.ts` uses `Bun.serve` with `routes:`. Random ephemeral port in
+  `20000–60000` to dodge the Bun port-0 EADDRINUSE bug and the common :3000
+  collision. `--port` pins it.
+- `PUT /api/file` accepts either `{raw, baseMtime}` (whole-file replace from
+  browser editor) or `{diagram, sections, baseMtime}` (splice patch from CLI).
+  Both paths go through `applyPatch` when in patch mode.
+- Conflict detection is mtime-based: 409 with current view if `baseMtime`
+  mismatches.
+- `index.ts` installs SIGINT/SIGTERM/SIGHUP handlers → `server.stop(true)`
+  for clean shutdown. EADDRINUSE on bind → friendly error with `lsof` hint.
+- Auto-open browser only when port is random (default). Pinned `--port`
+  assumes the user wants to reattach to an existing tab. `--no-open` forces
+  off.
+
+### Tests
+
+`bun test` runs `src/planFile.test.ts` — the splice operations and fence
+detection have heavy coverage here. Any change to `planFile.ts` should keep
+these green and add cases for new behavior.
+
+### Publishing
+
+- Scoped public package → free on npm.
+- Bump `version` in `package.json` before each `npm publish`.
+- `npm publish` requires 2FA OTP; run it yourself via `! npm publish` so the
+  OTP prompt is fresh (the tool-invoked subprocess can't handle interactive
+  TTY prompts).

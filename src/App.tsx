@@ -286,6 +286,9 @@ export function App() {
     dirtyRef.current = false;
     setConflict(null);
     setSaveState("idle");
+    try {
+      localStorage.setItem("plan-cli:last-path", view.path);
+    } catch {}
   };
 
   const loadFile = async (path: string): Promise<boolean> => {
@@ -364,7 +367,12 @@ export function App() {
         }
         return;
       }
+      let lastPath: string | null = null;
+      try {
+        lastPath = localStorage.getItem("plan-cli:last-path");
+      } catch {}
       const preferred =
+        (lastPath && list.find(f => f.path === lastPath)) ??
         list.find(f => f.path === "PLAN.md") ??
         list.find(f => f.path.toLowerCase() === "plan.md") ??
         list[0];

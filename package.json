@@ -1,6 +1,6 @@
 {
   "name": "@malikkurosaki/plan-cli",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Planning layer antara otakmu dan Claude Code — markdown editor + ASCII diagram canvas + CLI, powered by Bun.",
   "module": "index.ts",
   "type": "module",

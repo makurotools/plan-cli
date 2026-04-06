@@ -1,11 +1,43 @@
 {
-  "name": "plan-cli",
+  "name": "@makurotools/plan-cli",
   "version": "0.1.0",
+  "description": "Planning layer antara otakmu dan Claude Code — markdown editor + ASCII diagram canvas + CLI, powered by Bun.",
   "module": "index.ts",
   "type": "module",
-  "private": true,
   "bin": {
     "plan": "./index.ts"
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "bun-env.d.ts",
+    "tsconfig.json",
+    "README.md"
+  ],
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "keywords": [
+    "plan",
+    "planning",
+    "markdown",
+    "editor",
+    "cli",
+    "ascii",
+    "diagram",
+    "bun"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/makurotools/plan-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/makurotools/plan-cli/issues"
+  },
+  "homepage": "https://github.com/makurotools/plan-cli#readme",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "dev": "bun run index.ts",

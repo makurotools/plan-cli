@@ -1,4 +1,4 @@
-# Plan
+# Plppan
 
 ## Diagram
 
@@ -63,7 +63,7 @@ apa saja
 
 ## Task
 
-- [ ] nama
+- [x] nama
 - [ ] umur
 
 

@@ -36,6 +36,113 @@ export function App() {
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
+  // ── In-file search ──
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchCursor, setSearchCursor] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  const searchMatches = useMemo(() => {
+    if (!searchOpen || !searchQuery) return [] as number[];
+    const q = searchQuery.toLowerCase();
+    const hay = raw.toLowerCase();
+    const out: number[] = [];
+    let from = 0;
+    while (true) {
+      const idx = hay.indexOf(q, from);
+      if (idx === -1) break;
+      out.push(idx);
+      from = idx + Math.max(1, q.length);
+    }
+    return out;
+  }, [searchOpen, searchQuery, raw]);
+
+  // Precompute line+col for every match so we can draw overlays without
+  // re-splitting raw on every render.
+  const searchMatchPositions = useMemo(() => {
+    if (searchMatches.length === 0) return [] as { line: number; col: number }[];
+    // Walk raw once, tracking line starts, then binary-search each match.
+    const lineStarts: number[] = [0];
+    for (let i = 0; i < raw.length; i++) {
+      if (raw[i] === "\n") lineStarts.push(i + 1);
+    }
+    const locate = (offset: number) => {
+      let lo = 0;
+      let hi = lineStarts.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (lineStarts[mid] <= offset) lo = mid;
+        else hi = mid - 1;
+      }
+      return { line: lo, col: offset - lineStarts[lo] };
+    };
+    return searchMatches.map(locate);
+  }, [searchMatches, raw]);
+
+  // Clamp cursor whenever matches change
+  useEffect(() => {
+    if (searchMatches.length === 0) {
+      if (searchCursor !== 0) setSearchCursor(0);
+      return;
+    }
+    if (searchCursor >= searchMatches.length) setSearchCursor(0);
+  }, [searchMatches, searchCursor]);
+
+  const focusMatch = (idx: number) => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const start = searchMatches[idx];
+    if (start === undefined) return;
+    const end = start + searchQuery.length;
+    // Do NOT call ta.focus() — that would steal focus from the search
+    // input while the user is still typing. setSelectionRange still
+    // renders the selection visually on an unfocused textarea.
+    ta.setSelectionRange(start, end);
+    // Scroll match into view: compute its line, center it.
+    const lineIdx = raw.slice(0, start).split("\n").length - 1;
+    const lh = editorMetrics.lineHeight || 21;
+    const target =
+      editorMetrics.paddingTop + lineIdx * lh - ta.clientHeight / 2;
+    ta.scrollTop = Math.max(0, target);
+  };
+
+  const advanceSearch = (dir: 1 | -1) => {
+    if (searchMatches.length === 0) return;
+    const next =
+      (searchCursor + dir + searchMatches.length) % searchMatches.length;
+    setSearchCursor(next);
+    focusMatch(next);
+  };
+
+  const openSearch = () => {
+    setSearchOpen(true);
+    // Prefill with current selection if any. Use rawRef because this
+    // function is invoked from the global keydown listener whose
+    // closure may capture stale `raw` state.
+    const ta = textareaRef.current;
+    if (ta) {
+      const sel = rawRef.current.slice(ta.selectionStart, ta.selectionEnd);
+      if (sel && !sel.includes("\n")) setSearchQuery(sel);
+    }
+    setTimeout(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    }, 0);
+  };
+
+  const closeSearch = () => {
+    setSearchOpen(false);
+    textareaRef.current?.focus();
+  };
+
+  // Jump to first match automatically when query changes and matches exist
+  useEffect(() => {
+    if (!searchOpen || searchMatches.length === 0) return;
+    focusMatch(0);
+    setSearchCursor(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery, searchOpen]);
+
   // ── Diagram modal ──
   // editingDiagram = index of block being edited; null = closed.
   const [editingDiagram, setEditingDiagram] = useState<number | null>(null);
@@ -488,6 +595,11 @@ export function App() {
         closeDiagram(true);
         return;
       }
+      if (mod && e.key.toLowerCase() === "f" && !e.shiftKey) {
+        e.preventDefault();
+        openSearch();
+        return;
+      }
       if (mod && e.key.toLowerCase() === "b" && !e.shiftKey) {
         e.preventDefault();
         setSidebarCollapsed(c => !c);
@@ -607,6 +719,55 @@ export function App() {
         <div className="main-canvas">
           {activePath ? (
             <div className="editor-wrap">
+              {searchOpen && (
+                <div className="search-bar">
+                  <input
+                    ref={searchInputRef}
+                    className="search-input"
+                    type="text"
+                    value={searchQuery}
+                    placeholder="Cari di file…"
+                    onChange={e => setSearchQuery(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        closeSearch();
+                      } else if (e.key === "Enter") {
+                        e.preventDefault();
+                        advanceSearch(e.shiftKey ? -1 : 1);
+                      }
+                    }}
+                  />
+                  <span className="search-count">
+                    {searchMatches.length === 0
+                      ? searchQuery
+                        ? "0/0"
+                        : ""
+                      : `${searchCursor + 1}/${searchMatches.length}`}
+                  </span>
+                  <button
+                    className="search-btn"
+                    onClick={() => advanceSearch(-1)}
+                    title="Sebelumnya (Shift+Enter)"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    className="search-btn"
+                    onClick={() => advanceSearch(1)}
+                    title="Berikutnya (Enter)"
+                  >
+                    ↓
+                  </button>
+                  <button
+                    className="search-btn"
+                    onClick={closeSearch}
+                    title="Tutup (Esc)"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
               <textarea
                 key={activePath}
                 ref={textareaRef}
@@ -649,6 +810,39 @@ export function App() {
                     >
                       {t.done ? "✓" : ""}
                     </button>
+                  );
+                })}
+              {editorMetrics.lineHeight > 0 &&
+                searchOpen &&
+                searchQuery &&
+                !searchQuery.includes("\n") &&
+                searchMatchPositions.map((p, i) => {
+                  const top =
+                    editorMetrics.paddingTop +
+                    p.line * editorMetrics.lineHeight -
+                    editorScrollTop;
+                  if (
+                    top < -editorMetrics.lineHeight ||
+                    top > (textareaRef.current?.clientHeight ?? 0)
+                  ) {
+                    return null;
+                  }
+                  const left =
+                    editorMetrics.paddingLeft +
+                    p.col * editorMetrics.charWidth;
+                  const width = searchQuery.length * editorMetrics.charWidth;
+                  const isCurrent = i === searchCursor;
+                  return (
+                    <div
+                      key={`match-${i}`}
+                      className={`search-hit${isCurrent ? " current" : ""}`}
+                      style={{
+                        top: `${top}px`,
+                        left: `${left}px`,
+                        width: `${width}px`,
+                        height: `${editorMetrics.lineHeight}px`,
+                      }}
+                    />
                   );
                 })}
               {editorMetrics.lineHeight > 0 &&
